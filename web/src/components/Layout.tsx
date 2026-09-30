@@ -4,14 +4,14 @@ import { useAuth } from "../auth";
 import { clearDirectoryCache } from "../directory";
 import { Avatar, cx } from "./ui";
 
-export function Logo() {
+export function Logo({ compact }: { compact?: boolean }) {
   return (
     <div className="flex items-center gap-2.5">
       <svg viewBox="0 0 32 32" className="size-8">
         <rect x="3" y="10" width="14" height="12" rx="4" fill="none" stroke="#22d3ee" strokeWidth="2.5" />
         <rect x="15" y="10" width="14" height="12" rx="4" fill="none" stroke="#a78bfa" strokeWidth="2.5" />
       </svg>
-      <div className="leading-tight">
+      <div className={cx("leading-tight", compact && "hidden md:block")}>
         <div className="text-sm font-semibold text-white">Authorization Grants</div>
         <div className="text-[11px] uppercase tracking-[0.2em] text-slate-400">Chain</div>
       </div>
@@ -45,8 +45,8 @@ export default function Layout() {
     <div className="min-h-screen">
       <header className="sticky top-0 z-20 border-b border-white/5 bg-slate-950/70 backdrop-blur-lg">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4">
-          <div className="flex items-center gap-6">
-            <Logo />
+          <div className="flex items-center gap-3 sm:gap-6">
+            <Logo compact />
             <nav className="flex items-center gap-1">
               {user && <Tab to="/" icon={<LayoutDashboard className="size-4" />} label="Dashboard" />}
               {user?.role === "official" && <Tab to="/scan" icon={<ScanLine className="size-4" />} label="Scan QR" />}
@@ -54,7 +54,7 @@ export default function Layout() {
             </nav>
           </div>
           {user ? (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <div className="hidden text-right md:block">
                 <div className="flex items-center justify-end gap-1.5 text-sm font-medium text-slate-100">
                   {user.isSuper && <Crown className="size-3.5 text-amber-300" />}
