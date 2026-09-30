@@ -55,6 +55,12 @@ services:
       node1: { condition: service_started }
       node2: { condition: service_started }
 
+  web:
+    build: ./web
+    restart: unless-stopped
+    ports: ["${WEB_PORT:-8090}:80"]
+    depends_on: [api]
+
 volumes:
   node1-data:
   node2-data:
