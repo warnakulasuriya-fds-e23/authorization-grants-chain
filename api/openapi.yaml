@@ -1,0 +1,362 @@
+openapi: 3.0.3
+info:
+  title: Authorization Grants Chain — Gateway API
+  version: 1.0.0
+  description: |
+    Off-chain gateway used by the web client. It holds login credentials and
+    user metadata (PostgreSQL), runs the QR verification flow, and forwards
+    ledger writes to the chain nodes round-robin. Only user ids go on chain.
+
+    Roles: `official` and `verifier`. A *super official* is any official that
+    holds an active `ADMIN` grant **on the chain**.
+servers:
+  - url: http://localhost:8090
+    description: Through the web client's reverse proxy
+security:
+  - bearer: []
+tags:
+  - name: Auth
+  - name: Directory
+  - name: Grants
+  - name: Verifications
+  - name: Explorer
+paths:
+  /api/health:
+    get:
+      tags: [Explorer]
+      summary: Liveness check
+      security: []
+      responses:
+        "200": { description: OK }
+  /api/auth/demo-accounts:
+    get:
+      tags: [Auth]
+      summary: Demo usernames and the shared demo password (for the login screen)
+      security: []
+      responses:
+        "200":
+          description: Demo accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  password: { type: string }
+                  accounts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        username: { type: string }
+                        fullName: { type: string }
+                        role: { type: string }
+                        title: { type: string }
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Exchange credentials for a bearer token (logout = discard the token)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, example: chief }
+                password: { type: string, example: demo1234 }
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  user: { $ref: "#/components/schemas/Profile" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user, including the on-chain super official flag
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/users:
+    get:
+      tags: [Directory]
+      summary: All users (used to resolve on-chain ids to names)
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/User" }
+  /api/scopes:
+    get:
+      tags: [Directory]
+      summary: Catalogue of authority scopes
+      security: []
+      responses:
+        "200":
+          description: Scopes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    code: { type: string, example: VEHICLE_SEARCH }
+                    label: { type: string }
+                    description: { type: string }
+  /api/grants:
+    get:
+      tags: [Grants]
+      summary: Grants derived from the chain
+      parameters:
+        - { name: subject, in: query, schema: { type: string }, description: Grantee user id }
+        - { name: grantor, in: query, schema: { type: string } }
+        - { name: scope, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Grants, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Grant" }
+    post:
+      tags: [Grants]
+      summary: Grant an authority to an official (requires on-chain ADMIN)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [granteeId, scope]
+              properties:
+                granteeId: { type: string, format: uuid }
+                scope: { type: string, example: PREMISES_ENTRY }
+                expiresAt: { type: integer, format: int64, description: Unix seconds; omit for no expiry }
+                note: { type: string }
+      responses:
+        "201": { $ref: "#/components/responses/Mined" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /api/grants/{txId}/revoke:
+    post:
+      tags: [Grants]
+      summary: Revoke a grant (requires on-chain ADMIN)
+      parameters:
+        - { name: txId, in: path, required: true, schema: { type: string } }
+      responses:
+        "201": { $ref: "#/components/responses/Mined" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/verifications:
+    get:
+      tags: [Verifications]
+      summary: Recent requests I created (verifier) or answered (official)
+      responses:
+        "200":
+          description: Requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Verification" }
+    post:
+      tags: [Verifications]
+      summary: Create a verification request to show as a QR code (verifier only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope]
+              properties:
+                scope: { type: string, example: VEHICLE_SEARCH }
+                purpose: { type: string, example: Roadside stop on A1 }
+      responses:
+        "201": { $ref: "#/components/responses/VerificationDetail" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/verifications/{id}:
+    get:
+      tags: [Verifications]
+      summary: A request with verifier / official profiles (verifier polls this)
+      parameters:
+        - { $ref: "#/components/parameters/VerificationId" }
+      responses:
+        "200": { $ref: "#/components/responses/VerificationDetail" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/verifications/{id}/approve:
+    post:
+      tags: [Verifications]
+      summary: Official consents to disclose their authority
+      description: |
+        The chain is checked for an active grant of the requested scope. If held,
+        a `VERIFY` transaction is mined and the request becomes `approved` with
+        a proof; otherwise it becomes `unauthorized`.
+      parameters:
+        - { $ref: "#/components/parameters/VerificationId" }
+      responses:
+        "200": { $ref: "#/components/responses/VerificationDetail" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/verifications/{id}/decline:
+    post:
+      tags: [Verifications]
+      summary: Official declines to disclose
+      parameters:
+        - { $ref: "#/components/parameters/VerificationId" }
+      responses:
+        "200": { $ref: "#/components/responses/VerificationDetail" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/chain/nodes:
+    get:
+      tags: [Explorer]
+      summary: Status of every chain node
+      security: []
+      responses:
+        "200":
+          description: Node statuses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name: { type: string, example: node1 }
+                    online: { type: boolean }
+                    height: { type: integer }
+                    length: { type: integer }
+                    tipHash: { type: string }
+                    genesisHash: { type: string }
+                    difficulty: { type: integer }
+  /api/chain/nodes/{name}/blocks:
+    get:
+      tags: [Explorer]
+      summary: The full chain as held by one node
+      security: []
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string, example: node1 } }
+      responses:
+        "200":
+          description: See the chain node spec (`GET /chain`)
+        "404": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    VerificationId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, example: K7Q2M9XD }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+    Mined:
+      description: Transaction mined into a block
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              tx: { type: object }
+              block:
+                type: object
+                properties:
+                  index: { type: integer }
+                  hash: { type: string }
+                  miner: { type: string }
+    VerificationDetail:
+      description: Verification request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              request: { $ref: "#/components/schemas/Verification" }
+              expiresAt: { type: string, format: date-time }
+              verifier: { $ref: "#/components/schemas/User" }
+              official: { $ref: "#/components/schemas/User" }
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        fullName: { type: string }
+        role: { type: string, enum: [official, verifier] }
+        title: { type: string }
+        organization: { type: string }
+        badgeNo: { type: string }
+    Profile:
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          properties:
+            isSuper: { type: boolean, description: Holds an active ADMIN grant on chain }
+    Grant:
+      type: object
+      properties:
+        txId: { type: string }
+        grantor: { type: string }
+        grantee: { type: string }
+        scope: { type: string }
+        note: { type: string }
+        expiresAt: { type: integer, format: int64 }
+        grantedAt: { type: integer, format: int64 }
+        block: { type: integer }
+        revoked: { type: boolean }
+        revokedBy: { type: string }
+        revokedAt: { type: integer, format: int64 }
+        status: { type: string, enum: [active, revoked, expired] }
+    Verification:
+      type: object
+      properties:
+        id: { type: string }
+        verifierId: { type: string, format: uuid }
+        scope: { type: string }
+        purpose: { type: string }
+        status: { type: string, enum: [pending, approved, declined, unauthorized, expired] }
+        officialId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        decidedAt: { type: string, format: date-time }
+        proof:
+          type: object
+          description: Present once decided
+          properties:
+            authorized: { type: boolean }
+            checkedAt: { type: string, format: date-time }
+            txId: { type: string }
+            blockIndex: { type: integer }
+            blockHash: { type: string }
+            minedBy: { type: string }
+            grant: { $ref: "#/components/schemas/Grant" }
+            provenance:
+              type: array
+              items: { $ref: "#/components/schemas/Grant" }
