@@ -1,0 +1,239 @@
+openapi: 3.0.3
+info:
+  title: Authorization Grants Chain — Node API
+  version: 1.0.0
+  description: |
+    One replica of the permissioned ledger. Every node holds a full copy of the
+    chain, validates transactions against the grant rules, mines a block per
+    transaction (light proof-of-work) and gossips it to its peers.
+
+    Rules enforced by every node:
+    - `GRANT` / `REVOKE` require the actor to hold an active `ADMIN` grant.
+    - `VERIFY` requires the actor to hold an active grant for the scope, referenced by `ref`.
+    - The genesis block grants `ADMIN` to the configured root officials.
+servers:
+  - url: http://localhost:8081
+    description: node1
+  - url: http://localhost:8082
+    description: node2
+tags:
+  - name: Node
+  - name: Ledger
+  - name: State
+  - name: P2P
+paths:
+  /health:
+    get:
+      tags: [Node]
+      summary: Liveness check
+      responses:
+        "200":
+          description: Node is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  nodeId: { type: string, example: node1 }
+  /info:
+    get:
+      tags: [Node]
+      summary: Node height, tip hash and (optionally) peer status
+      parameters:
+        - name: peers
+          in: query
+          schema: { type: string, enum: ["true"] }
+          description: Include reachability and height of each peer.
+      responses:
+        "200":
+          description: Node info
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NodeInfo" }
+  /chain:
+    get:
+      tags: [Ledger]
+      summary: Full chain held by this node
+      responses:
+        "200":
+          description: All blocks, genesis first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nodeId: { type: string }
+                  length: { type: integer }
+                  blocks:
+                    type: array
+                    items: { $ref: "#/components/schemas/Block" }
+  /blocks/{index}:
+    get:
+      tags: [Ledger]
+      summary: A single block by height
+      parameters:
+        - name: index
+          in: path
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: The block
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Block" }
+        "404": { $ref: "#/components/responses/Error" }
+  /transactions:
+    post:
+      tags: [Ledger]
+      summary: Submit a transaction (mined into a new block and broadcast)
+      description: "`id` and `timestamp` are assigned by the node."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TxInput" }
+            examples:
+              grant:
+                value: { type: GRANT, actor: 00000000-0000-4000-8000-000000000001, subject: 00000000-0000-4000-8000-000000000003, scope: VEHICLE_SEARCH, note: Operation Nightfall }
+      responses:
+        "201":
+          description: Transaction mined
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tx: { $ref: "#/components/schemas/Tx" }
+                  block: { $ref: "#/components/schemas/Block" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /grants:
+    get:
+      tags: [State]
+      summary: Grants derived from the chain, newest first
+      parameters:
+        - { name: subject, in: query, schema: { type: string }, description: Filter by grantee }
+        - { name: grantor, in: query, schema: { type: string }, description: Filter by grantor }
+        - { name: scope, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Matching grants
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Grant" }
+  /verify:
+    get:
+      tags: [State]
+      summary: Is the subject currently authorized for the scope?
+      parameters:
+        - { name: subject, in: query, required: true, schema: { type: string } }
+        - { name: scope, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Authorization result with provenance back to genesis
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerifyResult" }
+  /p2p/blocks:
+    post:
+      tags: [P2P]
+      summary: Receive a block gossiped by a peer
+      parameters:
+        - { name: X-Peer, in: header, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Block" }
+      responses:
+        "202": { description: Accepted (appended, adopted on fork, or sync triggered) }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+components:
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+  schemas:
+    TxInput:
+      type: object
+      required: [type, actor, subject, scope]
+      properties:
+        type: { type: string, enum: [GRANT, REVOKE, VERIFY] }
+        actor: { type: string, description: User id performing the action }
+        subject: { type: string, description: User id the action is about }
+        scope: { type: string, example: VEHICLE_SEARCH }
+        ref: { type: string, description: "REVOKE/VERIFY: grant transaction id" }
+        expiresAt: { type: integer, format: int64, description: Unix seconds, GRANT only }
+        note: { type: string }
+    Tx:
+      allOf:
+        - $ref: "#/components/schemas/TxInput"
+        - type: object
+          properties:
+            id: { type: string, description: SHA-256 of the transaction content }
+            timestamp: { type: integer, format: int64 }
+    Block:
+      type: object
+      properties:
+        index: { type: integer }
+        timestamp: { type: integer, format: int64 }
+        transactions:
+          type: array
+          items: { $ref: "#/components/schemas/Tx" }
+        prevHash: { type: string }
+        nonce: { type: integer }
+        miner: { type: string, example: node1 }
+        hash: { type: string }
+    Grant:
+      type: object
+      properties:
+        txId: { type: string }
+        grantor: { type: string }
+        grantee: { type: string }
+        scope: { type: string }
+        note: { type: string }
+        expiresAt: { type: integer, format: int64 }
+        grantedAt: { type: integer, format: int64 }
+        block: { type: integer }
+        revoked: { type: boolean }
+        revokedBy: { type: string }
+        revokedAt: { type: integer, format: int64 }
+        revokedBlock: { type: integer }
+        status: { type: string, enum: [active, revoked, expired] }
+    VerifyResult:
+      type: object
+      properties:
+        authorized: { type: boolean }
+        grant: { $ref: "#/components/schemas/Grant" }
+        provenance:
+          type: array
+          description: The grant, then each grantor's ADMIN grant, up to genesis
+          items: { $ref: "#/components/schemas/Grant" }
+    NodeInfo:
+      type: object
+      properties:
+        nodeId: { type: string }
+        height: { type: integer }
+        length: { type: integer }
+        tipHash: { type: string }
+        genesisHash: { type: string }
+        difficulty: { type: integer }
+        peers:
+          type: array
+          items:
+            type: object
+            properties:
+              url: { type: string }
+              reachable: { type: boolean }
+              height: { type: integer }
+              tipHash: { type: string }
