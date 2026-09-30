@@ -1,0 +1,18 @@
+# Node / frontend
+node_modules/
+dist/
+*.local
+
+# Go
+*.exe
+/chain-node/chain-node
+/api/api
+
+# Runtime data
+data/
+.env
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
