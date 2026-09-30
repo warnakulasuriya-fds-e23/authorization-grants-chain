@@ -108,11 +108,14 @@ function BlockCard({
   const genesis = block.index === 0;
   const tx = block.transactions;
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onClick()}
       style={{ width: CARD_W, height: CARD_H, animationDelay: `${delay}ms` }}
       className={cx(
-        "group relative shrink-0 cursor-pointer snap-center rounded-2xl border bg-gradient-to-b from-slate-900 to-slate-950 text-left shadow-xl shadow-black/40 transition",
+        "group relative shrink-0 cursor-pointer snap-center outline-none rounded-2xl border bg-gradient-to-b from-slate-900 to-slate-950 text-left shadow-xl shadow-black/40 transition",
         selected ? "border-cyan-400/60 ring-2 ring-cyan-400/25" : "border-white/10 hover:border-white/25",
         invalid && "border-rose-500/70 ring-2 ring-rose-500/30",
         animate && "block-in",
@@ -151,7 +154,7 @@ function BlockCard({
       <div className="absolute inset-x-0 flex h-7 items-center px-4" style={{ top: HASH_Y - 14 }}>
         <HashChip hash={block.hash} label="hash" />
       </div>
-    </button>
+    </div>
   );
 }
 
